@@ -55,6 +55,7 @@ pipeline {
         timeout(time: 60, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
+        cleanWs()
     }
 
     parameters {
