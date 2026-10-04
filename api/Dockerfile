@@ -1,17 +1,13 @@
-# ---- dependencies (production only) ----
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# ---- runtime ----
 FROM node:22-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json app.js index.js ./
-# Security hardening: patch Alpine packages, and delete npm/yarn/corepack - the app only needs `node`.
-# (npm bundles its own copies of tar, glob, minimatch ... which Trivy reports as HIGH/CRITICAL.)
 RUN apk upgrade --no-cache \
  && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
            /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
