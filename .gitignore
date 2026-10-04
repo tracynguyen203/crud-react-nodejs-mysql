@@ -1,4 +1,12 @@
 .git
-apps
+node_modules/
 **/node_modules
-**/*.env
+build/
+coverage/
+reports/
+.env
+*.env
+!*.env.example
+.scannerwork/
+trivy-reports/
+.deploy.env

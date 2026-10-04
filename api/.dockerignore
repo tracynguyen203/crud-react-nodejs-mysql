@@ -1,0 +1,6 @@
+node_modules
+coverage
+reports
+__tests__
+.env
+Dockerfile

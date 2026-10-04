@@ -1,0 +1,42 @@
+# Parameterised stack used by Jenkins for BOTH staging and production.
+#   docker compose -p crud-staging --env-file .deploy.env -f docker-compose.deploy.yml up -d
+# Same images, different env file => build once, promote the identical artefact.
+services:
+  crud-db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: crud
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  crud-api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    environment:
+      WEB_HOST: ${WEB_PUBLIC_URL}
+      DB_HOST: crud-db
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: crud
+    ports: ["${API_PORT}:3001"]
+    depends_on:
+      crud-db: { condition: service_healthy }
+  crud-web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    environment:
+      API_URL: ${API_PUBLIC_URL}
+    ports: ["${WEB_PORT}:8080"]
+    depends_on:
+      crud-api: { condition: service_healthy }
+volumes:
+  db-data:

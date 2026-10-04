@@ -1,0 +1,3 @@
+# Accepted / false-positive findings. EVERY entry needs a reason and an expiry date.
+# Format:  <CVE-or-ID>  exp:YYYY-MM-DD   # reason
+# (empty on purpose - nothing is currently ignored)
