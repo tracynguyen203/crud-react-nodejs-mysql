@@ -1,11 +1,3 @@
-// =============================================================================
-//  CRUD app (React + Node + MySQL)  -  Jenkins CI/CD, Windows agent + Docker Desktop
-//  Build -> Test -> Code Quality -> Security -> Deploy (staging) -> Release (prod) -> Monitoring
-//  Tools: Docker / Docker Hub, SonarQube, Trivy, Uptime Kuma
-//  Structure follows the EVAT pipeline; see docs/JENKINS_SETUP.md for credentials & Kuma setup.
-// =============================================================================
-
-// Poll a URL until it answers with a non-5xx status (same helper pattern as EVAT)
 def waitForHttp(String url) {
     withEnv(["CHECK_URL=${url}"]) {
         powershell '''
@@ -29,7 +21,6 @@ def waitForHttp(String url) {
     }
 }
 
-// Environment variables consumed by docker-compose.deploy.yml
 def composeEnv(String apiImage, String webImage, String apiPort, String webPort) {
     return [
         "API_IMAGE=${apiImage}", "WEB_IMAGE=${webImage}",
@@ -40,7 +31,6 @@ def composeEnv(String apiImage, String webImage, String apiPort, String webPort)
     ]
 }
 
-// Full create/read/update/delete check, run INSIDE the compose network of the given project
 def smokeTest(String project) {
     withEnv(["NET=${project}_default"]) {
         bat 'docker run --rm -i --network %NET% node:22-alpine node - http://crud-api:3001 http://crud-web:8080 < tests\\smoke.js'
@@ -49,7 +39,6 @@ def smokeTest(String project) {
 
 pipeline {
     agent any
-
     options {
         timestamps()
         timeout(time: 60, unit: 'MINUTES')
@@ -70,7 +59,7 @@ pipeline {
         DH_NAMESPACE    = 'tracynguyen203'
         PROD_API        = "tracynguyen203/crud-api:${env.BUILD_NUMBER}"
         PROD_WEB        = "tracynguyen203/crud-web:${env.BUILD_NUMBER}"
-        GITHUB_REPO     = 'github.com/tracynguyen203/crud-react-nodejs-mysql.git'   // <-- your repo
+        GITHUB_REPO     = 'github.com/tracynguyen203/crud-react-nodejs-mysql.git'
         SONAR_HOST_URL  = 'http://host.docker.internal:9000'
         KUMA_URL        = 'http://localhost:3001'
         STAGING_WEB     = '4000'
@@ -82,7 +71,7 @@ pipeline {
 
     stages {
 
-        // Stage 1 ---------------------------------------------------------------
+        // Stage 1 
         stage('Build') {
             steps {
                 bat 'git log -1 --oneline'
@@ -99,12 +88,11 @@ pipeline {
             }
         }
 
-        // Stage 2 ---------------------------------------------------------------
+        // Stage 2 
         stage('Test') {
             steps {
                 bat 'if not exist reports\\api mkdir reports\\api'
                 bat 'if not exist reports\\web mkdir reports\\web'
-                // Unit tests run in throw-away Node containers (no Node needed on the agent)
                 bat '''
                     docker run --rm -v "%WORKSPACE%:/src:ro" -v "%WORKSPACE%/reports/api:/out" node:22-alpine sh /src/scripts/test-api.sh
                 '''
@@ -117,11 +105,10 @@ pipeline {
             }
         }
 
-        // Stage 3 ---------------------------------------------------------------
+        // Stage 3 
         stage('Code Quality') {
             steps {
                 withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                    // UNSTABLE (not FAILED) if the quality gate fails, so later stages still run
                     catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                         bat '''
                             docker run --rm -e SONAR_HOST_URL=%SONAR_HOST_URL% -e SONAR_TOKEN -v "%WORKSPACE%:/usr/src" sonarsource/sonar-scanner-cli -Dsonar.projectBaseDir=/usr/src -Dsonar.projectVersion=%IMAGE_TAG% -Dsonar.qualitygate.wait=true
@@ -131,19 +118,15 @@ pipeline {
             }
         }
 
-        // Stage 4 ---------------------------------------------------------------
+        // Stage 4 
         stage('Security') {
             steps {
                 bat 'if not exist reports mkdir reports'
-
-                // (a) npm dependency vulnerabilities (production deps of api + web)
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     bat '''
                         docker run --rm -v "%WORKSPACE%:/src:ro" -v "%WORKSPACE%/reports:/out" node:22-alpine sh /src/scripts/npm-audit.sh
                     '''
                 }
-
-                // (b) Trivy filesystem scan: hard-coded secrets + Dockerfile misconfiguration
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     bat '''
                         docker run --rm -v trivy-cache:/root/.cache/ -v "%WORKSPACE%:/src:ro" -v "%WORKSPACE%/reports:/reports" aquasec/trivy:latest fs --scanners secret,misconfig --severity HIGH,CRITICAL --skip-dirs /src/reports --ignorefile /src/.trivyignore --no-progress --exit-code 1 --output /reports/trivy-fs.txt /src
@@ -153,8 +136,6 @@ pipeline {
                     '''
                 }
 
-                // (c) Trivy image scan: OS + library CVEs (HIGH/CRITICAL with a fix available)
-                //     Accepted findings go in .trivyignore (repo root) with a reason + expiry.
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     bat '''
                         docker run --rm -v //var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v "%WORKSPACE%:/src:ro" -v "%WORKSPACE%/reports:/reports" aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /src/.trivyignore --no-progress --exit-code 1 --output /reports/trivy-api.txt %LOCAL_API%
@@ -170,10 +151,9 @@ pipeline {
             }
         }
 
-        // Stage 5 ---------------------------------------------------------------
+        // Stage 5 
         stage('Deploy') {
             steps {
-                // Staging = the freshly built local images, run with Docker Compose
                 withEnv(composeEnv(env.LOCAL_API, env.LOCAL_WEB, env.STAGING_API, env.STAGING_WEB)) {
                     withCredentials([string(credentialsId: 'crud-db-root-password', variable: 'DB_ROOT_PASSWORD'),
                                      string(credentialsId: 'crud-db-password',      variable: 'DB_PASSWORD')]) {
@@ -181,7 +161,6 @@ pipeline {
                         bat 'docker compose -p crud-staging -f docker-compose.deploy.yml up -d'
                         script { waitForHttp("http://localhost:${env.STAGING_WEB}/") }
                         bat 'docker compose -p crud-staging -f docker-compose.deploy.yml ps'
-                        // Automated check that the deployment works end-to-end (web -> API -> MySQL)
                         script { smokeTest('crud-staging') }
                     }
                 }
@@ -202,7 +181,7 @@ pipeline {
             }
         }
 
-        // Stage 6 ---------------------------------------------------------------
+        // Stage 6 
         stage('Release') {
             steps {
                 script {
@@ -213,7 +192,6 @@ pipeline {
                     }
                 }
 
-                // (a) Publish the already-tested images to Docker Hub
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
                                                   usernameVariable: 'DH_USER',
                                                   passwordVariable: 'DH_PASS')]) {
@@ -238,7 +216,6 @@ pipeline {
                     '''
                 }
 
-                // (b) Git release tag (UNSTABLE, not FAILED, if the push is rejected)
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     withCredentials([usernamePassword(credentialsId: 'github-token',
                                                       usernameVariable: 'GH_USER',
@@ -254,7 +231,6 @@ pipeline {
                     }
                 }
 
-                // (c) Production = images pulled back from Docker Hub, with rollback on failure
                 script {
                     env.PREV_API = bat(returnStdout: true,
                         script: '@docker inspect --format "{{.Config.Image}}" crud-prod-crud-api-1 2>nul || exit /b 0').trim()
@@ -287,17 +263,14 @@ pipeline {
             }
         }
 
-        // Stage 7 ---------------------------------------------------------------
+        // Stage 7 
         stage('Monitoring') {
             steps {
-                // Production must be answering before we tell Uptime Kuma the release is healthy
                 script {
                     waitForHttp("http://localhost:${env.PROD_WEB_PORT}/")
                     waitForHttp("http://localhost:${env.PROD_API_PORT}/health")
                     waitForHttp("${env.KUMA_URL}/")
                 }
-                // Heartbeat to the Kuma PUSH monitor. The HTTP monitors for the web app and
-                // API /health (created once in the Kuma UI) keep watching production 24/7.
                 withCredentials([string(credentialsId: 'crud-kuma-push-token', variable: 'KUMA_TOKEN')]) {
                     powershell '''
                         $ErrorActionPreference = 'Stop'
@@ -319,7 +292,6 @@ pipeline {
             echo "Pipeline OK - ${env.PROD_API} and ${env.PROD_WEB} are running in production (web :${env.PROD_WEB_PORT}, api :${env.PROD_API_PORT})."
         }
         failure {
-            // Alert: flips the Kuma push monitor to DOWN -> Kuma sends your notification
             script {
                 try {
                     withCredentials([string(credentialsId: 'crud-kuma-push-token', variable: 'KUMA_TOKEN')]) {
