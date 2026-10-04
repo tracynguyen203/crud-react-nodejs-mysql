@@ -1,6 +1,3 @@
-# Parameterised stack used by Jenkins for BOTH staging and production.
-#   docker compose -p crud-staging --env-file .deploy.env -f docker-compose.deploy.yml up -d
-# Same images, different env file => build once, promote the identical artefact.
 services:
   crud-db:
     image: mysql:8.4
